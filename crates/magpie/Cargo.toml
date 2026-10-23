@@ -7,7 +7,10 @@ repository.workspace = true
 
 [dependencies]
 magpie-core.workspace = true
+magpie-editor.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+notify.workspace = true
+libc.workspace = true

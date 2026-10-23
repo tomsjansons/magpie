@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/magpie-core", "crates/magpie"]
+members = ["crates/magpie-core", "crates/magpie-editor", "crates/magpie"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,6 +10,10 @@ repository = "https://github.com/tomsjansons/magpie"
 
 [workspace.dependencies]
 magpie-core = { path = "crates/magpie-core" }
+magpie-editor = { path = "crates/magpie-editor" }
+# Pins the matching GPUI snapshot and re-exports GPUI, its platform layer and
+# gpui-component, so the editor needs nothing else from that family.
+gpui-kit = "0.8"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -17,6 +21,12 @@ clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile = "3"
+tiny-skia = "0.12"
+ab_glyph = "0.2"
+libc = "0.2"
+lyon = "1"
+smallvec = "1"
+notify = { version = "8", default-features = false }
 
 # Image decoding is unusably slow unoptimized; keep our own crates debuggable.
 [profile.dev.package."*"]

@@ -7,7 +7,9 @@ use chrono::{DateTime, Local};
 use image::ImageFormat;
 use serde::Serialize;
 
-use crate::model::{ORIGINAL, Shot};
+use crate::model::{ORIGINAL, Shot, Variant};
+use crate::render;
+use crate::shapes::Annotation;
 use crate::target::Target;
 
 /// Longest edge of the generated thumbnails, in pixels. The panel shows them
@@ -188,7 +190,69 @@ impl Library {
         }
     }
 
-    fn original_path(&self, shot: &Shot) -> PathBuf {
+    /// The shapes of a version: none for the original.
+    pub fn annotation(&self, target: &Target) -> Result<Annotation> {
+        let shot = self.shot(&target.shot)?;
+        if target.is_original() {
+            return Ok(Annotation::default());
+        }
+        if shot.variant(&target.version).is_none() {
+            bail!("shot {} has no version {:?}", shot.id, target.version);
+        }
+        let path = self
+            .shot_dir(&shot.id)
+            .join(format!("{}.json", target.version));
+        let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// Render `annotation` onto the shot's original and store it as the next
+    /// version (`v1`, `v2`, ...) with the given parent.
+    pub fn save_variant(
+        &self,
+        shot_id: &str,
+        parent: &str,
+        annotation: &Annotation,
+    ) -> Result<Variant> {
+        let shot = self.shot(shot_id)?;
+        if parent != ORIGINAL && shot.variant(parent).is_none() {
+            bail!("shot {shot_id} has no version {parent:?}");
+        }
+        let base = image::open(self.original_path(&shot)).context("opening the original")?;
+        let rendered = render::render(&base.to_rgba8(), &annotation.shapes)?;
+
+        // Re-read right before writing, so a save from another editor window
+        // in the meantime is not lost.
+        let mut shot = self.shot(shot_id)?;
+        let next = shot
+            .variants
+            .iter()
+            .filter_map(|v| v.id.strip_prefix('v')?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let variant = Variant {
+            id: format!("v{next}"),
+            parent: parent.to_string(),
+            created: Local::now(),
+        };
+        let dir = self.shot_dir(shot_id);
+        write_atomic(
+            &dir.join(format!("{}.json", variant.id)),
+            &serde_json::to_vec_pretty(annotation)?,
+        )?;
+        write_atomic(
+            &dir.join(format!("{}.png", variant.id)),
+            &render::encode_png(&rendered)?,
+        )?;
+        let thumb = thumbnail(&image::DynamicImage::ImageRgba8(rendered))?;
+        write_atomic(&dir.join(format!("{}.thumb.png", variant.id)), &thumb)?;
+        shot.variants.push(variant.clone());
+        write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(&shot)?)?;
+        Ok(variant)
+    }
+
+    pub fn original_path(&self, shot: &Shot) -> PathBuf {
         match &shot.source {
             Some(path) => path.clone(),
             None => self.shot_dir(&shot.id).join(format!("{ORIGINAL}.png")),
@@ -215,7 +279,7 @@ impl Library {
     /// Write a new shot directory. The thumbnail is made before anything is
     /// written, so a file that is not an image never becomes a shot.
     fn create(&self, shot: &Shot, image_bytes: &[u8], store_original: Option<&[u8]>) -> Result<()> {
-        let thumb = thumbnail(image_bytes)?;
+        let thumb = thumbnail(&image::load_from_memory(image_bytes).context("decoding image")?)?;
         let dir = self.shot_dir(&shot.id);
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         if let Some(bytes) = store_original {
@@ -235,8 +299,7 @@ fn existing(path: PathBuf) -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-fn thumbnail(image_bytes: &[u8]) -> Result<Vec<u8>> {
-    let img = image::load_from_memory(image_bytes).context("decoding image")?;
+fn thumbnail(img: &image::DynamicImage) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     img.thumbnail(THUMB_SIZE, THUMB_SIZE)
         .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)?;
@@ -312,6 +375,47 @@ mod tests {
         fs::write(&txt, "hello").unwrap();
         assert!(lib.add_file(&txt).is_err());
         assert!(lib.shots().unwrap().is_empty());
+    }
+
+    #[test]
+    fn variants_number_up_and_keep_their_shapes() {
+        use crate::shapes::{Color, Point, Shape};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open(tmp.path()).unwrap();
+        let shot = lib.add_png(&png(64, 48)).unwrap();
+        let box_shape = Shape::Rect {
+            from: Point::new(4.0, 4.0),
+            to: Point::new(30.0, 30.0),
+            color: Color::rgb(255, 0, 0),
+            width: 3.0,
+        };
+        let first = Annotation {
+            shapes: vec![box_shape.clone()],
+        };
+        let v1 = lib.save_variant(&shot.id, ORIGINAL, &first).unwrap();
+        assert_eq!((v1.id.as_str(), v1.parent.as_str()), ("v1", ORIGINAL));
+
+        let v1_target: Target = format!("{}@v1", shot.id).parse().unwrap();
+        let mut second = lib.annotation(&v1_target).unwrap();
+        assert_eq!(second, first);
+        second.shapes.push(box_shape);
+        let v2 = lib.save_variant(&shot.id, "v1", &second).unwrap();
+        assert_eq!((v2.id.as_str(), v2.parent.as_str()), ("v2", "v1"));
+
+        let rendered = image::open(lib.resolve(&v1_target).unwrap()).unwrap();
+        assert_eq!((rendered.width(), rendered.height()), (64, 48));
+        assert_eq!(rendered.to_rgba8().get_pixel(4, 15).0[0], 255);
+        let view = lib.view(&lib.shot(&shot.id).unwrap());
+        assert_eq!(view.variants.len(), 2);
+        assert!(view.variants.iter().all(|v| v.thumb.is_some()));
+        assert!(
+            lib.annotation(&shot.id.parse().unwrap())
+                .unwrap()
+                .shapes
+                .is_empty()
+        );
+        assert!(lib.save_variant(&shot.id, "v7", &second).is_err());
     }
 
     #[test]

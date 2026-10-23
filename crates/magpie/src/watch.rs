@@ -1,15 +1,24 @@
-//! Follow `niri msg --json event-stream` and import every screenshot.
+//! Follow `niri msg --json event-stream` and import every screenshot, and
+//! report library changes made by anything else (the editor saving a variant).
 
 use std::io::{BufRead, BufReader};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use magpie_core::Library;
+use notify::{RecursiveMode, Watcher};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::clipboard;
+use magpie_core::clipboard;
+
+/// Library writes arrive as bursts of file events; one `changed` per burst.
+const SETTLE: Duration = Duration::from_millis(150);
 
 /// One line of `magpie watch` output.
 #[derive(Serialize)]
@@ -17,7 +26,14 @@ use crate::clipboard;
 enum Out {
     Ready,
     Added { id: String, new: bool },
+    Changed,
     Error { message: String },
+}
+
+enum Msg {
+    Niri(String),
+    NiriEnded(String),
+    Library,
 }
 
 fn emit(out: &Out) {
@@ -26,35 +42,82 @@ fn emit(out: &Out) {
 }
 
 pub fn run(lib: &Library, niri: &str) -> Result<()> {
-    let mut child = Command::new(niri)
+    let (tx, rx) = mpsc::channel();
+
+    let mut command = Command::new(niri);
+    command
         .args(["msg", "--json", "event-stream"])
-        .stdout(Stdio::piped())
+        .stdout(Stdio::piped());
+    // The plugin stops us with a plain kill; take niri's client down too
+    // instead of leaving it to linger until its next write fails.
+    // SAFETY: prctl is async-signal-safe and touches no Rust state.
+    unsafe {
+        command.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+    let mut child = command
         .spawn()
         .with_context(|| format!("running {niri} msg event-stream"))?;
     let stdout = child.stdout.take().expect("stdout is piped");
+    let niri_tx = tx.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if niri_tx.send(Msg::Niri(line)).is_err() {
+                return;
+            }
+        }
+        let status = child
+            .wait()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|e| e.to_string());
+        let _ = niri_tx.send(Msg::NiriEnded(status));
+    });
+
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.is_ok_and(|e| e.paths.iter().any(|p| is_meta(p))) {
+            let _ = tx.send(Msg::Library);
+        }
+    })?;
+    watcher.watch(&lib.root().join("shots"), RecursiveMode::Recursive)?;
+
     emit(&Out::Ready);
-
-    for line in BufReader::new(stdout).lines() {
-        let line = line.context("reading niri event stream")?;
-        let Some(path) = screenshot_event(&line) else {
-            continue;
-        };
-        let result = match path {
-            Some(path) => lib.add_file(Path::new(&path)).map(|a| (a.shot.id, a.new)),
-            None => clipboard::paste_png()
-                .and_then(|png| lib.add_png(&png))
-                .map(|shot| (shot.id, true)),
-        };
-        emit(&match result {
-            Ok((id, new)) => Out::Added { id, new },
-            Err(err) => Out::Error {
-                message: format!("{err:#}"),
-            },
-        });
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            Msg::Niri(line) => {
+                if let Some(path) = screenshot_event(&line) {
+                    emit(&import(lib, path));
+                }
+            }
+            Msg::Library => {
+                while let Ok(Msg::Library) = rx.recv_timeout(SETTLE) {}
+                emit(&Out::Changed);
+            }
+            Msg::NiriEnded(status) => bail!("niri event stream ended: {status}"),
+        }
     }
+    bail!("watch channel closed")
+}
 
-    let status = child.wait()?;
-    bail!("niri event stream ended: {status}")
+fn import(lib: &Library, path: Option<String>) -> Out {
+    let result = match path {
+        Some(path) => lib.add_file(Path::new(&path)).map(|a| (a.shot.id, a.new)),
+        None => clipboard::paste_png()
+            .and_then(|png| lib.add_png(&png))
+            .map(|shot| (shot.id, true)),
+    };
+    match result {
+        Ok((id, new)) => Out::Added { id, new },
+        Err(err) => Out::Error {
+            message: format!("{err:#}"),
+        },
+    }
+}
+
+fn is_meta(path: &Path) -> bool {
+    path.file_name().is_some_and(|n| n == "meta.json")
 }
 
 /// `Some(path)` for a `ScreenshotCaptured` event, where `path` is `None` for a

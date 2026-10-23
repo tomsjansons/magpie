@@ -1,11 +1,10 @@
-mod clipboard;
 mod watch;
 
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use magpie_core::{Library, Target};
+use magpie_core::{Library, Target, clipboard};
 
 /// Screenshot library and annotator for niri + Noctalia.
 #[derive(Parser)]
@@ -83,10 +82,7 @@ fn main() -> Result<()> {
         }
         Command::Copy { target } => clipboard::copy_png(&lib.resolve(&target)?)?,
         Command::Path { target } => println!("{}", lib.resolve(&target)?.display()),
-        Command::Edit { target } => {
-            lib.resolve(&target)?;
-            bail!("the editor is not built yet");
-        }
+        Command::Edit { target } => magpie_editor::run(lib, target)?,
         Command::Watch { niri } => watch::run(&lib, &niri)?,
     }
     Ok(())

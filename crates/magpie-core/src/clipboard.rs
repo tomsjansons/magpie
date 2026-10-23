@@ -1,6 +1,7 @@
 //! Wayland clipboard through wl-clipboard (`wl-copy`, `wl-paste`).
 
 use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -19,6 +20,22 @@ pub fn copy_png(path: &Path) -> Result<()> {
         .stdin(file)
         .status()
         .context("running wl-copy")?;
+    if !status.success() {
+        bail!("wl-copy failed: {status}");
+    }
+    Ok(())
+}
+
+/// Puts PNG bytes on the clipboard. wl-copy keeps serving them after this
+/// process exits, which a window-owned clipboard on Wayland would not.
+pub fn copy_png_bytes(png: &[u8]) -> Result<()> {
+    let mut child = Command::new("wl-copy")
+        .args(["--type", PNG])
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("running wl-copy")?;
+    child.stdin.take().expect("stdin is piped").write_all(png)?;
+    let status = child.wait()?;
     if !status.success() {
         bail!("wl-copy failed: {status}");
     }

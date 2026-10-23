@@ -1,0 +1,56 @@
+# magpie: screenshot library and annotator for niri.
+#
+# One [[service]] (`watch`) holds `magpie watch` open. That process imports
+# every screenshot niri reports and announces library changes; the service
+# answers each by re-reading `magpie list --json` and publishing it on the
+# "magpie" noctalia.state key. The bar widget and panel are thin clients of
+# that value and shell out to `magpie` for copy and edit.
+#
+# plugin_api 24: require() modules (22) and the argv form of runAsync (24),
+# which also covers nowMs (12).
+
+id           = "toms/magpie"
+name         = "Magpie"
+version      = "0.1.0"
+plugin_api   = 24
+author       = "toms"
+license      = "GPL-3.0-only"
+icon         = "camera"
+description  = "Screenshot history from niri with copy and annotate."
+tags         = ["bar", "panel"]
+dependencies = ["magpie", "niri", "wl-copy", "wl-paste"]
+
+[[setting]]
+key             = "magpie_command"
+type            = "string"
+label_key       = "settings.magpie_command.label"
+description_key = "settings.magpie_command.description"
+default         = "magpie"
+
+[[setting]]
+key             = "list_limit"
+type            = "int"
+label_key       = "settings.list_limit.label"
+description_key = "settings.list_limit.description"
+default         = 30
+min             = 1
+max             = 200
+
+# Headless: runs `magpie watch`, publishes the shot list, retries with backoff.
+[[service]]
+id    = "watch"
+entry = "watch.luau"
+
+# Camera glyph plus the number of shots taken since the panel was last opened.
+# Left click toggles the panel, right click copies the newest shot.
+[[widget]]
+id    = "button"
+entry = "button.luau"
+
+[[panel]]
+id              = "shots"
+entry           = "shots.luau"
+width           = 560
+height          = 640
+placement       = "attached"
+open_near_click = true

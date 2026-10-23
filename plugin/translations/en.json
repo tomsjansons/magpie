@@ -1,0 +1,46 @@
+{
+  "settings": {
+    "magpie_command": {
+      "label": "magpie command",
+      "description": "Path or name of the magpie executable."
+    },
+    "list_limit": {
+      "label": "Shots listed",
+      "description": "How many of the newest screenshots the panel shows."
+    }
+  },
+  "status": {
+    "connecting": "Starting magpie watch…",
+    "command_missing": "{command} not found. Install magpie or set its path in the plugin settings.",
+    "spawn_failed": "Could not start magpie watch.",
+    "stopped": "magpie watch stopped, retrying…"
+  },
+  "widget": {
+    "tooltip": "Screenshots",
+    "tooltip_new": "Screenshots · {count} new",
+    "copied": "Newest screenshot copied"
+  },
+  "panel": {
+    "title": "Screenshots",
+    "refresh": "Refresh",
+    "close": "Close",
+    "copy": "Copy to clipboard",
+    "copied": "Copied",
+    "annotate": "Annotate",
+    "annotate_from": "New version from {version}",
+    "empty": "No screenshots yet. Take one with niri (Print) and it shows up here.",
+    "missing": "original file missing",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "original": "original",
+    "from": "from {parent}",
+    "render_error": "Could not draw the panel",
+    "versions": {
+      "one": "{count} version",
+      "other": "{count} versions"
+    }
+  },
+  "notify": {
+    "action_failed": "magpie {action} failed"
+  }
+}
