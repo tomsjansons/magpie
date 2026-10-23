@@ -30,7 +30,11 @@ plugin/               Noctalia plugin, id toms/magpie
 shots/<id>/meta.json   { source, taken_at, variants: [{ id, parent, created }] }
 shots/<id>/v<n>.json   full shape list for that variant
 shots/<id>/v<n>.png    rendered output
+shots/<id>/<version>.thumb.png   480px thumbnail for the panel
+shots/<id>/original.png          clipboard-only captures
 ```
+
+`MAGPIE_DATA_DIR` overrides the root.
 
 - The original stays where niri wrote it and is never modified.
 - `parent` is `"original"` or another variant id; this is the version tree the
@@ -47,6 +51,7 @@ shots/<id>/v<n>.png    rendered output
 | `magpie add <path>` / `--clipboard` | import a screenshot |
 | `magpie list --json` | shots + variant tree, newest first |
 | `magpie copy <id>[@variant]` | `wl-copy -t image/png` |
+| `magpie path <id>[@variant]` | print the PNG path |
 | `magpie edit <id>[@variant]` | open the editor seeded from that version |
 | `magpie watch` | follow niri events, print one JSON line per change |
 
@@ -70,7 +75,7 @@ shots/<id>/v<n>.png    rendered output
 
 ## Milestones
 
-1. core storage + CLI (`add`, `list`, `copy`) + `watch`
+1. ~~core storage + CLI (`add`, `list`, `copy`) + `watch`~~ done
 2. plugin: service, bar widget, panel with copy
 3. editor: canvas, tools, save variant, copy
 4. README, install notes, plugin catalog
