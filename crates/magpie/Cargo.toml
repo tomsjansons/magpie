@@ -1,0 +1,11 @@
+[package]
+name = "magpie"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+magpie-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
