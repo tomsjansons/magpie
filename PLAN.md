@@ -76,12 +76,12 @@ shots/<id>/original.png          clipboard-only captures
 ## Milestones
 
 1. ~~core storage + CLI (`add`, `list`, `copy`) + `watch`~~ done
-2. plugin: service, bar widget, panel with copy
-3. editor: canvas, tools, save variant, copy
-4. README, install notes, plugin catalog
+2. ~~plugin: service, bar widget, panel with copy~~ done
+3. ~~editor: canvas, tools, save variant, copy~~ done
+4. ~~README, install notes~~ done; plugin catalog when publishing
 
 ## Risks
 
-- gpui on crates.io (0.2.2) is a year old; gpui-component 0.8 likely needs
-  gpui from the Zed git repo. Pin an exact rev and expect upgrade friction.
+- GPUI comes through `gpui-kit`, which pins a published GPUI snapshot
+  (`gpui-pre`). Upgrades move all of it together.
 - Text metrics must match between GPUI and tiny-skia; bundle one font.

@@ -5,9 +5,9 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use magpie_core::Library;
@@ -77,24 +77,39 @@ pub fn run(lib: &Library, niri: &str) -> Result<()> {
     });
 
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event.is_ok_and(|e| e.paths.iter().any(|p| is_meta(p))) {
+        if event.is_ok_and(|e| is_library_change(&e)) {
             let _ = tx.send(Msg::Library);
         }
     })?;
     watcher.watch(&lib.root().join("shots"), RecursiveMode::Recursive)?;
 
     emit(&Out::Ready);
-    while let Ok(msg) = rx.recv() {
+    // When library changes are pending, the instant to report them; every
+    // further change pushes it back, so a burst becomes one `changed`.
+    let mut changed_at: Option<Instant> = None;
+    loop {
+        let msg = match changed_at {
+            Some(at) => match rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                Ok(msg) => msg,
+                Err(RecvTimeoutError::Timeout) => {
+                    changed_at = None;
+                    emit(&Out::Changed);
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            },
+            None => match rx.recv() {
+                Ok(msg) => msg,
+                Err(_) => break,
+            },
+        };
         match msg {
             Msg::Niri(line) => {
                 if let Some(path) = screenshot_event(&line) {
                     emit(&import(lib, path));
                 }
             }
-            Msg::Library => {
-                while let Ok(Msg::Library) = rx.recv_timeout(SETTLE) {}
-                emit(&Out::Changed);
-            }
+            Msg::Library => changed_at = Some(Instant::now() + SETTLE),
             Msg::NiriEnded(status) => bail!("niri event stream ended: {status}"),
         }
     }
@@ -116,8 +131,13 @@ fn import(lib: &Library, path: Option<String>) -> Out {
     }
 }
 
-fn is_meta(path: &Path) -> bool {
-    path.file_name().is_some_and(|n| n == "meta.json")
+/// A write to some shot's meta.json, which every import and save ends with.
+/// Reads are ignored: `magpie list` reads them all, and reporting that would
+/// make the plugin list again, forever.
+fn is_library_change(event: &notify::Event) -> bool {
+    use notify::EventKind::{Create, Modify, Remove};
+    matches!(event.kind, Create(_) | Modify(_) | Remove(_))
+        && event.paths.iter().any(|p| p.file_name().is_some_and(|n| n == "meta.json"))
 }
 
 /// `Some(path)` for a `ScreenshotCaptured` event, where `path` is `None` for a
@@ -152,5 +172,19 @@ mod tests {
             None
         );
         assert_eq!(screenshot_event("not json"), None);
+    }
+
+    #[test]
+    fn only_meta_writes_count_as_changes() {
+        use notify::event::{AccessKind, AccessMode, CreateKind, ModifyKind, RenameMode};
+        use notify::{Event, EventKind};
+
+        let meta = Path::new("/lib/shots/a/meta.json").to_path_buf();
+        let at = |kind| Event::new(kind).add_path(meta.clone());
+        assert!(is_library_change(&at(EventKind::Modify(ModifyKind::Name(RenameMode::To)))));
+        assert!(is_library_change(&at(EventKind::Create(CreateKind::File))));
+        assert!(!is_library_change(&at(EventKind::Access(AccessKind::Close(AccessMode::Read)))));
+        let thumb = Event::new(EventKind::Create(CreateKind::File)).add_path("/lib/shots/a/v1.png".into());
+        assert!(!is_library_change(&thumb));
     }
 }
