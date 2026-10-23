@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
+use gpui_kit::component::Theme;
 use gpui_kit::{
     App, AppContext as _, Bounds, Focusable as _, RenderImage, TitlebarOptions, WindowBounds,
     WindowOptions, px, size,
@@ -36,7 +37,6 @@ pub fn run(lib: Library, target: Target) -> Result<()> {
         .with_assets(icons::AppAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
-        gpui_kit::component::Theme::sync_system_appearance(None, cx);
             if let Err(err) = cx.text_system().add_fonts(vec![Cow::Borrowed(FONT_BYTES)]) {
                 eprintln!("magpie: loading the annotation font failed: {err:#}");
             }
@@ -56,6 +56,14 @@ pub fn run(lib: Library, target: Target) -> Result<()> {
                 ..Default::default()
             };
             let opened = gpui_kit::open_window(options, cx, |window, cx| {
+                // On Linux the portal's colour scheme arrives after start-up,
+                // so follow the window's appearance rather than the app's.
+                Theme::sync_system_appearance(Some(window), cx);
+                window
+                    .observe_window_appearance(|window, cx| {
+                        Theme::sync_system_appearance(Some(window), cx)
+                    })
+                    .detach();
                 let editor = cx.new(|cx| {
                     Editor::new(
                         lib.clone(),

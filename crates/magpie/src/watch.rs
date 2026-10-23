@@ -137,7 +137,10 @@ fn import(lib: &Library, path: Option<String>) -> Out {
 fn is_library_change(event: &notify::Event) -> bool {
     use notify::EventKind::{Create, Modify, Remove};
     matches!(event.kind, Create(_) | Modify(_) | Remove(_))
-        && event.paths.iter().any(|p| p.file_name().is_some_and(|n| n == "meta.json"))
+        && event
+            .paths
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "meta.json"))
 }
 
 /// `Some(path)` for a `ScreenshotCaptured` event, where `path` is `None` for a
@@ -181,10 +184,15 @@ mod tests {
 
         let meta = Path::new("/lib/shots/a/meta.json").to_path_buf();
         let at = |kind| Event::new(kind).add_path(meta.clone());
-        assert!(is_library_change(&at(EventKind::Modify(ModifyKind::Name(RenameMode::To)))));
+        assert!(is_library_change(&at(EventKind::Modify(ModifyKind::Name(
+            RenameMode::To
+        )))));
         assert!(is_library_change(&at(EventKind::Create(CreateKind::File))));
-        assert!(!is_library_change(&at(EventKind::Access(AccessKind::Close(AccessMode::Read)))));
-        let thumb = Event::new(EventKind::Create(CreateKind::File)).add_path("/lib/shots/a/v1.png".into());
+        assert!(!is_library_change(&at(EventKind::Access(
+            AccessKind::Close(AccessMode::Read)
+        ))));
+        let thumb =
+            Event::new(EventKind::Create(CreateKind::File)).add_path("/lib/shots/a/v1.png".into());
         assert!(!is_library_change(&thumb));
     }
 }
