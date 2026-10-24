@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _};
 use gpui_kit::{
     App, Bounds, Context, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
@@ -330,16 +330,17 @@ impl Editor {
 
     // ── Save and copy ────────────────────────────────────────────────────────
 
-    /// Saves a new version, then optionally copies it. Rendering a 4K shot
-    /// takes a moment, so it runs off the UI thread.
-    fn save(&mut self, copy: bool, cx: &mut Context<Self>) {
+    /// Saves a new version, then optionally copies it, and closes the window
+    /// when `close` is set and that worked. Rendering a 4K shot takes a
+    /// moment, so it runs off the UI thread.
+    fn save(&mut self, copy: bool, close: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_text();
         if self.busy {
             return;
         }
         if !self.dirty && copy && self.parent != ORIGINAL {
             // Nothing new to save: copy the version we are on.
-            return self.copy_saved(cx);
+            return self.copy_saved(close, window, cx);
         }
         self.busy = true;
         self.status = Some("Saving…".into());
@@ -359,12 +360,15 @@ impl Editor {
             }
             anyhow::Ok(variant.id)
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
                 this.busy = false;
                 match result {
                     Ok(id) => {
+                        if close {
+                            window.remove_window();
+                        }
                         this.status = Some(
                             if copy {
                                 format!("Saved {id} and copied")
@@ -384,7 +388,7 @@ impl Editor {
         .detach();
     }
 
-    fn copy_saved(&mut self, cx: &mut Context<Self>) {
+    fn copy_saved(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
         let target = format!("{}@{}", self.shot_id, self.parent);
         let result = target
             .parse()
@@ -392,17 +396,27 @@ impl Editor {
             .and_then(|t| self.lib.resolve(&t))
             .and_then(|path| clipboard::copy_png(&path));
         self.status = Some(match result {
-            Ok(()) => format!("Copied {}", self.parent).into(),
+            Ok(()) => {
+                if close {
+                    window.remove_window();
+                }
+                format!("Copied {}", self.parent).into()
+            }
             Err(err) => format!("Copy failed: {err:#}").into(),
         });
         cx.notify();
     }
 
-    /// Copies what is on screen without saving a version.
-    fn copy(&mut self, cx: &mut Context<Self>) {
+    /// Copies what is on screen without saving a version, and closes the
+    /// window when `close` is set and the copy worked. Closing saves unsaved
+    /// changes anyway, so in that case save and copy in one go.
+    fn copy(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_text();
         if self.busy {
             return;
+        }
+        if close && self.has_unsaved_changes() {
+            return self.save(true, true, window, cx);
         }
         self.busy = true;
         self.status = Some("Copying…".into());
@@ -413,12 +427,17 @@ impl Editor {
             let png = render::encode_png(&render::render(&base, &annotation)?)?;
             clipboard::copy_png_bytes(&png)
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
                 this.busy = false;
                 this.status = Some(match result {
-                    Ok(()) => "Copied".into(),
+                    Ok(()) => {
+                        if close {
+                            window.remove_window();
+                        }
+                        "Copied".into()
+                    }
                     Err(err) => format!("Copy failed: {err:#}").into(),
                 });
                 cx.notify();
@@ -565,10 +584,14 @@ impl Editor {
             match (key, m.shift) {
                 ("z", false) => self.undo(),
                 ("z", true) | ("y", _) => self.redo(),
-                ("c", false) => self.copy(cx),
-                ("c", true) => self.save(true, cx),
-                ("s", _) => self.save(false, cx),
-                ("w" | "q", _) => window.remove_window(),
+                ("c", false) => self.copy(false, window, cx),
+                ("c", true) => self.save(true, false, window, cx),
+                ("s", _) => self.save(false, false, window, cx),
+                ("w" | "q", _) => {
+                    // Closing this way skips the window's should-close hook.
+                    self.save_blocking();
+                    window.remove_window();
+                }
                 _ => return,
             }
             cx.stop_propagation();
@@ -738,23 +761,49 @@ impl Editor {
                     })),
             )
             .child(
-                Button::new("copy")
-                    .icon(Icon::Copy)
-                    .label("Copy")
+                ButtonGroup::new("copy-group")
                     .small()
                     .disabled(self.busy)
-                    .tooltip("Copy to clipboard without saving (Ctrl+C)")
-                    .on_click(cx.listener(|this, _, _, cx| this.copy(cx))),
+                    .child(
+                        Button::new("copy")
+                            .icon(Icon::Copy)
+                            .label("Copy")
+                            .tooltip("Copy to clipboard without saving (Ctrl+C)")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.copy(false, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("copy-close")
+                            .label("& close")
+                            .tooltip("Copy to clipboard and close; unsaved changes are saved as a new version")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.copy(true, window, cx)
+                            })),
+                    ),
             )
             .child(
-                Button::new("save")
-                    .icon(Icon::Save)
-                    .label("Save version")
+                ButtonGroup::new("save-group")
                     .primary()
                     .small()
                     .disabled(self.busy || !self.dirty)
-                    .tooltip("Save as a new version (Ctrl+S); Ctrl+Shift+C saves and copies")
-                    .on_click(cx.listener(|this, _, _, cx| this.save(false, cx))),
+                    .child(
+                        Button::new("save")
+                            .icon(Icon::Save)
+                            .label("Save version")
+                            .tooltip("Save as a new version (Ctrl+S); Ctrl+Shift+C saves and copies")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.save(false, false, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("save-close")
+                            .label("& close")
+                            .tooltip("Save as a new version and close")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.save(false, true, window, cx)
+                            })),
+                    ),
             );
 
         let status = self.status.clone().unwrap_or_else(|| {

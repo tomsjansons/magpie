@@ -78,6 +78,11 @@ niri's own files are never modified. `MAGPIE_DATA_DIR` moves the library.
 
 Picking a color or width while a shape is selected restyles that shape.
 
+The **Copy** and **Save version** buttons are split: the left half copies or
+saves, the right half (**& close**) does the same and then closes the editor.
+Copy & close with unsaved changes also saves them as a new version, as any
+close does.
+
 **Background** puts the screenshot on a gradient with padding, rounded corners
 and a soft shadow, like a presentation shot. Pick one of the gradients and a
 padding size in the row that appears; shapes can be drawn out into the
