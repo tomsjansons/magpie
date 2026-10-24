@@ -5,11 +5,12 @@
 use std::sync::Arc;
 
 use gpui_kit::{
-    App, Bounds, Corners, FontWeight, Hsla, PathBuilder, PathStyle, Pixels, Point as GPoint,
-    RenderImage, Rgba, SharedString, StrokeOptions, TextAlign, TextRun, Window, font, point, px,
-    size,
+    App, Bounds, BoxShadow, Corners, FontWeight, Hsla, PathBuilder, PathStyle, Pixels,
+    Point as GPoint, RenderImage, Rgba, SharedString, StrokeOptions, TextAlign, TextRun, Window,
+    fill, font, linear_color_stop, linear_gradient, point, px, size,
 };
 use lyon::tessellation::{LineCap, LineJoin};
+use magpie_core::frame::{Frame, SHADOW_OPACITY};
 use magpie_core::shapes::{Color, FONT_FAMILY, LINE_HEIGHT, Point, Shape, arrow_geometry};
 
 /// Maps image pixels to window coordinates: the image is fitted into the
@@ -21,13 +22,16 @@ pub struct View {
 }
 
 impl View {
-    pub fn fit(canvas: Bounds<Pixels>, image: (u32, u32), device_scale: f32) -> Self {
+    /// `pad` is the frame's padding on each side, fitted along with the image.
+    pub fn fit(canvas: Bounds<Pixels>, image: (u32, u32), pad: u32, device_scale: f32) -> Self {
+        let pad = pad as f32;
         let (iw, ih) = (image.0.max(1) as f32, image.1.max(1) as f32);
+        let (ow, oh) = (iw + 2.0 * pad, ih + 2.0 * pad);
         let (cw, ch) = (f32::from(canvas.size.width), f32::from(canvas.size.height));
-        let scale = (cw / iw).min(ch / ih).min(1.0 / device_scale.max(0.1));
+        let scale = (cw / ow).min(ch / oh).min(1.0 / device_scale.max(0.1));
         let origin = point(
-            canvas.origin.x + px((cw - iw * scale) / 2.0),
-            canvas.origin.y + px((ch - ih * scale) / 2.0),
+            canvas.origin.x + px((cw - ow * scale) / 2.0 + pad * scale),
+            canvas.origin.y + px((ch - oh * scale) / 2.0 + pad * scale),
         );
         View { origin, scale }
     }
@@ -61,12 +65,56 @@ pub fn hsla(c: Color) -> Hsla {
     .into()
 }
 
-pub fn paint_image(view: &View, image: &Arc<RenderImage>, dims: (u32, u32), window: &mut Window) {
-    let bounds = Bounds {
+fn image_bounds(view: &View, dims: (u32, u32)) -> Bounds<Pixels> {
+    Bounds {
         origin: view.origin,
         size: size(view.len(dims.0 as f32), view.len(dims.1 as f32)),
+    }
+}
+
+/// `radius` rounds the corners, in image pixels.
+pub fn paint_image(
+    view: &View,
+    image: &Arc<RenderImage>,
+    dims: (u32, u32),
+    radius: f32,
+    window: &mut Window,
+) {
+    let bounds = image_bounds(view, dims);
+    let corners = Corners::all(view.len(radius));
+    let _ = window.paint_image(bounds, bounds, corners, image.clone(), 0, false);
+}
+
+/// The gradient background and the screenshot's shadow, under the image.
+pub fn paint_frame(view: &View, frame: &Frame, dims: (u32, u32), window: &mut Window) {
+    let pad = frame.pad() as f32;
+    let (ow, oh) = frame.outer(dims);
+    let outer = Bounds {
+        origin: view.to_window(Point::new(-pad, -pad)),
+        size: size(view.len(ow as f32), view.len(oh as f32)),
     };
-    let _ = window.paint_image(bounds, bounds, Corners::default(), image.clone(), 0, false);
+    window.paint_quad(fill(
+        outer,
+        linear_gradient(
+            frame.angle,
+            linear_color_stop(hsla(frame.from), 0.),
+            linear_color_stop(hsla(frame.to), 1.),
+        ),
+    ));
+    if frame.shadow > 0.0 {
+        let offset = frame.shadow_offset();
+        window.paint_drop_shadows(
+            image_bounds(view, dims),
+            Corners::all(view.len(frame.radius)),
+            &[BoxShadow {
+                color: Hsla::black().opacity(SHADOW_OPACITY),
+                offset: point(view.len(offset.x), view.len(offset.y)),
+                blur_radius: view.len(frame.shadow),
+                spread_radius: px(0.),
+                inset: false,
+            }],
+        );
+    }
 }
 
 fn stroke_builder(width: Pixels) -> PathBuilder {

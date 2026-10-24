@@ -2,6 +2,7 @@
 //! renderer used for export. Shared by the CLI and the editor.
 
 pub mod clipboard;
+pub mod frame;
 mod library;
 mod model;
 pub mod render;

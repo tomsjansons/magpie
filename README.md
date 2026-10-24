@@ -44,7 +44,7 @@ list on every change.
 ~/.local/share/magpie/shots/<id>/
   meta.json          source path, time, versions and their parents
   original.png       only for clipboard-only captures
-  v1.json  v1.png    shapes and rendered image for each version
+  v1.json  v1.png    shapes, frame and rendered image for each version
   *.thumb.png        thumbnails for the panel
 ```
 
@@ -77,6 +77,12 @@ niri's own files are never modified. `MAGPIE_DATA_DIR` moves the library.
 | `Ctrl+W` | close; unsaved changes are saved as a new version |
 
 Picking a color or width while a shape is selected restyles that shape.
+
+**Background** puts the screenshot on a gradient with padding, rounded corners
+and a soft shadow, like a presentation shot. Pick one of the gradients and a
+padding size in the row that appears; shapes can be drawn out into the
+padding. The frame is saved with the version, so it stays editable and can be
+switched off again in a later version.
 
 ## License
 

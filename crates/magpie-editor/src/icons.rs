@@ -43,6 +43,7 @@ pub enum Icon {
     Trash,
     Copy,
     Save,
+    Frame,
 }
 
 impl IconNamed for Icon {
@@ -58,6 +59,7 @@ impl IconNamed for Icon {
             Icon::Trash => "icons/trash.svg",
             Icon::Copy => "icons/copy.svg",
             Icon::Save => "icons/save.svg",
+            Icon::Frame => "icons/frame.svg",
         }
         .into()
     }

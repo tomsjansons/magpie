@@ -351,6 +351,9 @@ pub fn layout_text(text: &str, size: f32) -> TextLayout {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Annotation {
     pub shapes: Vec<Shape>,
+    /// Gradient background around the screenshot, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<crate::frame::Frame>,
 }
 
 #[cfg(test)]

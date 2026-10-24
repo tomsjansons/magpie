@@ -1,6 +1,6 @@
 //! The editor window: a toolbar over a canvas showing the screenshot with its
-//! shapes. Every edit replaces `shapes` wholesale and pushes the previous list
-//! on the undo stack, which keeps undo trivially correct.
+//! shapes and frame. Every edit replaces the annotation wholesale and pushes
+//! the previous one on the undo stack, which keeps undo trivially correct.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -12,8 +12,9 @@ use gpui_kit::{
     App, Bounds, Context, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     Pixels, Render, RenderImage, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Window, canvas, div, px,
+    Window, canvas, div, linear_color_stop, linear_gradient, px,
 };
+use magpie_core::frame::{Frame, GRADIENTS, PADDINGS};
 use magpie_core::shapes::{Annotation, Color, Point, Shape};
 use magpie_core::{Library, ORIGINAL, clipboard, render};
 
@@ -62,10 +63,10 @@ impl Tool {
 enum Drag {
     /// Drawing a new arrow, box or circle.
     Draw { start: Point, current: Point },
-    /// Moving the selected shape; `before` is the list to undo to.
+    /// Moving the selected shape; `before` is what to undo to.
     Move {
         last: Point,
-        before: Vec<Shape>,
+        before: Annotation,
         moved: bool,
     },
 }
@@ -91,8 +92,11 @@ pub struct Editor {
     base_width: f32,
 
     shapes: Vec<Shape>,
-    undo: Vec<Vec<Shape>>,
-    redo: Vec<Vec<Shape>>,
+    frame: Option<Frame>,
+    /// The frame switching the frame back on restores.
+    last_frame: Frame,
+    undo: Vec<Annotation>,
+    redo: Vec<Annotation>,
     dirty: bool,
 
     tool: Tool,
@@ -128,6 +132,10 @@ impl Editor {
             dims,
             base_width,
             shapes: annotation.shapes,
+            frame: annotation.frame,
+            last_frame: annotation
+                .frame
+                .unwrap_or_else(|| Frame::new(dims, 0, PADDINGS[1].1)),
             undo: Vec::new(),
             redo: Vec::new(),
             dirty: false,
@@ -153,7 +161,7 @@ impl Editor {
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
-        self.dirty && !self.shapes.is_empty()
+        self.dirty && (!self.shapes.is_empty() || self.frame.is_some())
     }
 
     fn stroke_width(&self) -> f32 {
@@ -166,7 +174,7 @@ impl Editor {
 
     // ── Edits ────────────────────────────────────────────────────────────────
 
-    fn checkpoint(&mut self, before: Vec<Shape>) {
+    fn checkpoint(&mut self, before: Annotation) {
         self.undo.push(before);
         self.redo.clear();
         self.dirty = true;
@@ -174,26 +182,49 @@ impl Editor {
     }
 
     fn set_shapes(&mut self, shapes: Vec<Shape>) {
-        let before = std::mem::replace(&mut self.shapes, shapes);
+        let before = self.annotation();
+        self.shapes = shapes;
         self.checkpoint(before);
+    }
+
+    fn set_frame(&mut self, frame: Option<Frame>) {
+        if frame == self.frame {
+            return;
+        }
+        let before = self.annotation();
+        if let Some(frame) = frame {
+            self.last_frame = frame;
+        }
+        self.frame = frame;
+        self.checkpoint(before);
+    }
+
+    /// Replaces the current state with `annotation`, returning the old one.
+    fn restore(&mut self, annotation: Annotation) -> Annotation {
+        let current = self.annotation();
+        self.shapes = annotation.shapes;
+        self.frame = annotation.frame;
+        if let Some(frame) = self.frame {
+            self.last_frame = frame;
+        }
+        self.selected = None;
+        self.dirty = true;
+        current
     }
 
     fn undo(&mut self) {
         self.commit_text();
         if let Some(previous) = self.undo.pop() {
-            self.redo
-                .push(std::mem::replace(&mut self.shapes, previous));
-            self.selected = None;
-            self.dirty = true;
+            let current = self.restore(previous);
+            self.redo.push(current);
         }
     }
 
     fn redo(&mut self) {
         self.commit_text();
         if let Some(next) = self.redo.pop() {
-            self.undo.push(std::mem::replace(&mut self.shapes, next));
-            self.selected = None;
-            self.dirty = true;
+            let current = self.restore(next);
+            self.undo.push(current);
         }
     }
 
@@ -293,6 +324,7 @@ impl Editor {
     fn annotation(&self) -> Annotation {
         Annotation {
             shapes: self.shapes.clone(),
+            frame: self.frame,
         }
     }
 
@@ -378,7 +410,7 @@ impl Editor {
         let task = cx.background_executor().spawn(async move {
             let shot = lib.shot(&shot)?;
             let base = image::open(lib.original_path(&shot))?.to_rgba8();
-            let png = render::encode_png(&render::render(&base, &annotation.shapes)?)?;
+            let png = render::encode_png(&render::render(&base, &annotation)?)?;
             clipboard::copy_png_bytes(&png)
         });
         cx.spawn(async move |this, cx| {
@@ -431,7 +463,7 @@ impl Editor {
                     } else {
                         self.drag = Some(Drag::Move {
                             last: p,
-                            before: self.shapes.clone(),
+                            before: self.annotation(),
                             moved: false,
                         });
                     }
@@ -648,6 +680,23 @@ impl Editor {
             );
         }
 
+        let frame_toggle = Button::new("frame")
+            .icon(Icon::Frame)
+            .label("Background")
+            .ghost()
+            .small()
+            .selected(self.frame.is_some())
+            .tooltip("Gradient background with rounded corners")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.commit_text();
+                let frame = match this.frame {
+                    Some(_) => None,
+                    None => Some(this.last_frame),
+                };
+                this.set_frame(frame);
+                cx.notify();
+            }));
+
         let actions = div()
             .flex()
             .gap_1()
@@ -732,6 +781,8 @@ impl Editor {
             .child(colors)
             .child(div().w(px(1.)).h(px(20.)).bg(border))
             .child(widths)
+            .child(div().w(px(1.)).h(px(20.)).bg(border))
+            .child(frame_toggle)
             .child(
                 div()
                     .flex_1()
@@ -741,6 +792,79 @@ impl Editor {
                     .child(status),
             )
             .child(actions)
+    }
+}
+
+impl Editor {
+    /// Background presets and padding, shown while the frame is on.
+    fn frame_bar(&self, frame: Frame, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let border = theme.border;
+        let mut gradients = div().flex().gap_1().items_center();
+        for (index, (name, from, to)) in GRADIENTS.iter().copied().enumerate() {
+            let active = frame.uses_gradient(index);
+            gradients = gradients.child(
+                div()
+                    .id(SharedString::from(format!("gradient-{name}")))
+                    .size(px(20.))
+                    .rounded_full()
+                    .bg(linear_gradient(
+                        frame.angle,
+                        linear_color_stop(canvas::hsla(from), 0.),
+                        linear_color_stop(canvas::hsla(to), 1.),
+                    ))
+                    .border_2()
+                    .border_color(if active { theme.foreground } else { border })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(frame) = this.frame {
+                            this.set_frame(Some(Frame { from, to, ..frame }));
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+
+        let long = self.dims.0.max(self.dims.1) as f32;
+        let mut paddings = div().flex().gap_1();
+        for (label, fraction) in PADDINGS {
+            let padding = (long * fraction).round();
+            paddings = paddings.child(
+                Button::new(SharedString::from(format!("padding-{label}")))
+                    .label(label)
+                    .ghost()
+                    .small()
+                    .selected(frame.padding == padding)
+                    .tooltip("Padding around the screenshot")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(frame) = this.frame {
+                            this.set_frame(Some(Frame { padding, ..frame }));
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+
+        let label = |text: &'static str| {
+            div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(text)
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_1()
+            .border_b_1()
+            .border_color(border)
+            .bg(theme.background)
+            .child(label("Background"))
+            .child(gradients)
+            .child(div().w(px(1.)).h(px(20.)).bg(border))
+            .child(label("Padding"))
+            .child(paddings)
     }
 }
 
@@ -785,7 +909,7 @@ impl Render for Editor {
             .and_then(|i| self.shapes.get(i))
             .map(Shape::bounds);
         let accent = cx.theme().primary;
-        let (image, dims) = (self.image.clone(), self.dims);
+        let (image, dims, frame) = (self.image.clone(), self.dims, self.frame);
         let view_cell = self.view.clone();
         let device_scale = window.scale_factor();
         let cursor = match self.tool {
@@ -804,6 +928,7 @@ impl Render for Editor {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.toolbar(cx))
+            .children(frame.map(|frame| self.frame_bar(frame, cx)))
             .child(
                 div()
                     .id("canvas")
@@ -818,12 +943,17 @@ impl Render for Editor {
                     .child(
                         canvas(
                             move |bounds: Bounds<Pixels>, _, _| {
-                                let view = View::fit(bounds, dims, device_scale);
+                                let pad = frame.map_or(0, |f| f.pad());
+                                let view = View::fit(bounds, dims, pad, device_scale);
                                 view_cell.set(Some(view));
                                 view
                             },
                             move |_, view, window, cx| {
-                                canvas::paint_image(&view, &image, dims, window);
+                                if let Some(frame) = &frame {
+                                    canvas::paint_frame(&view, frame, dims, window);
+                                }
+                                let radius = frame.map_or(0., |f| f.radius);
+                                canvas::paint_image(&view, &image, dims, radius, window);
                                 for (shape, caret) in &shapes {
                                     canvas::paint_shape(&view, shape, *caret, window, cx);
                                 }

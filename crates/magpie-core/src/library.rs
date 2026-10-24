@@ -219,7 +219,7 @@ impl Library {
             bail!("shot {shot_id} has no version {parent:?}");
         }
         let base = image::open(self.original_path(&shot)).context("opening the original")?;
-        let rendered = render::render(&base.to_rgba8(), &annotation.shapes)?;
+        let rendered = render::render(&base.to_rgba8(), annotation)?;
 
         // Re-read right before writing, so a save from another editor window
         // in the meantime is not lost.
@@ -392,6 +392,7 @@ mod tests {
         };
         let first = Annotation {
             shapes: vec![box_shape.clone()],
+            frame: None,
         };
         let v1 = lib.save_variant(&shot.id, ORIGINAL, &first).unwrap();
         assert_eq!((v1.id.as_str(), v1.parent.as_str()), ("v1", ORIGINAL));
